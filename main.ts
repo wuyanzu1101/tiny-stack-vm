@@ -1,6 +1,5 @@
-// tinyvm: a stack VM for make.fun's tiny stack ISA v1 (ISA.md).
-// Runs every /input/<id>/program.bin on /input/<id>/input.bin and writes
-// /output/<id>/stdout.bin + /output/<id>/exit.txt. Node 22, no deps.
+// tinyvm: a stack VM for make.fun's tiny stack ISA v1 (ISA.md). Node 22, no deps.
+// Runs every /input/<id>/program.bin on its input.bin; writes stdout.bin + exit.txt.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -8,7 +7,7 @@ const I = process.env.MAKEFUN_INPUT_DIR ?? '/input';
 const O = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 const enc = new TextEncoder();
 
-// opcode byte -> [immediate bytes, pops, pushes]
+// opcode -> [immediate bytes, pops, pushes]
 const T = new Map([
   [0x00, [0, 0, 0]], [0x01, [1, 0, 1]], [0x02, [4, 0, 1]], [0x03, [0, 1, 0]],
   [0x04, [0, 1, 2]], [0x05, [0, 2, 2]], [0x06, [0, 2, 3]], [0x07, [0, 3, 3]],
@@ -22,8 +21,7 @@ const T = new Map([
   [0x53, [0, 1, 0]],
 ]);
 
-// Run one program; returns [bytes written, exit code]. Traps end the program
-// at once with their code, keeping the output written before them.
+// Run one program; returns [bytes, exit]. A trap ends it at once, keeping prior output.
 function run(P, inp) {
   const n = P.length;
   const D = new Int32Array(256); // data stack
@@ -106,13 +104,13 @@ function run(P, inp) {
         D[sp - 1] = M[a];
         break;
       }
-      case 0x41: { // STORE: ( v addr -- ), addr is on top
+      case 0x41: { // STORE
         const a = D[sp - 1], v = D[sp - 2];
         if (a < 0 || a >= 256) return end(6);
         sp -= 2; M[a] = v;
         break;
       }
-      case 0x50: { // PRINT: decimal ASCII, no newline
+      case 0x50: { // PRINT
         const b = enc.encode(String(D[sp - 1]));
         if (ol + b.length > 65536) return end(11);
         sp--; out.set(b, ol); ol += b.length;
@@ -128,8 +126,10 @@ function run(P, inp) {
   }
 }
 
-for (const id of readdirSync(I).sort()) {
-  const [out, exit] = run(readFileSync(join(I, id, 'program.bin')), readFileSync(join(I, id, 'input.bin')));
+// One unreadable instance must not kill the set: fall back to empty + trap 9.
+for (const id of readdirSync(I, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort()) {
+  let out = new Uint8Array(0), exit = 9;
+  try { [out, exit] = run(readFileSync(join(I, id, 'program.bin')), readFileSync(join(I, id, 'input.bin'))); } catch {}
   mkdirSync(join(O, id), { recursive: true });
   writeFileSync(join(O, id, 'stdout.bin'), out);
   writeFileSync(join(O, id, 'exit.txt'), String(exit) + '\n');
